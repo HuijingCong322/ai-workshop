@@ -823,11 +823,145 @@ RELATED PAST COVERAGE:
 - 邮件发送。
 - 审核通过/不通过逻辑。
 
+已补充的上下文溢出改进：
+
+- 新增 `context_overflow_manager.py`。
+- 在 LLM 调用前估算 prompt 大小。
+- 将文章正文、用户兴趣、历史相关文章分级压缩。
+- 如果 `ctx.sample(...)` 因上下文过长失败，自动使用更小上下文重试。
+- 多次失败后返回降级摘要，避免 Agent 卡死或无限重试。
+
 还不够产品化的地方：
 
 - 底层服务类如 `ArticleMemoryService`、`MemoryService` 需要完整源码和依赖。
 - 主要运行方式仍然是 notebook。
 - 没有网页 UI。
 - 不通过后重新生成主要依赖 Agent 指令，而不是完全硬编码的 workflow controller。
-- 上下文溢出主要靠 top-k 检索和截断预防，没有完整异常恢复机制。
 
+---
+
+## 8. 上下文溢出恢复机制改进
+
+原来的实现主要靠：
+
+```text
+top-k 检索
+正文截断 article["content"][:3000]
+related[:3]
+```
+
+这能预防大部分上下文过长，但如果文章本身很长、偏好很多、历史相关内容也很多，仍然可能超过模型上下文窗口。
+
+现在新增了 `context_overflow_manager.py`，把策略改成：
+
+```text
+正常上下文生成
+  ↓ 如果成功
+返回摘要
+  ↓ 如果上下文溢出
+压缩正文、减少 related、减少 interests
+  ↓ 重试
+  ↓ 如果仍然失败
+继续压缩
+  ↓ 多次失败
+返回降级摘要，避免无限循环
+```
+
+核心工具：
+
+```python
+@dataclass
+class ArticleContext:
+    title: str
+    content: str
+    interests: list[str]
+    related_titles: list[str]
+    treatment: str = "brief"
+```
+
+压缩策略：
+
+```python
+def compact_article_context(context: ArticleContext, level: int) -> ArticleContext:
+    content_limits = [3000, 1800, 900, 450]
+    related_limits = [3, 2, 1, 0]
+    interest_limits = [8, 5, 3, 2]
+
+    index = min(level, len(content_limits) - 1)
+
+    return ArticleContext(
+        title=context.title,
+        content=trim_text(context.content, content_limits[index]),
+        interests=context.interests[: interest_limits[index]],
+        related_titles=context.related_titles[: related_limits[index]],
+        treatment=context.treatment,
+    )
+```
+
+安全采样调用：
+
+```python
+async def safe_sample_with_context_retry(
+    ctx,
+    base_context: ArticleContext,
+    *,
+    max_retries: int = 3,
+) -> str:
+    last_error = None
+
+    for level in range(max_retries + 1):
+        compacted = compact_article_context(base_context, level)
+        prompt = build_article_summary_prompt(compacted)
+
+        try:
+            result = await ctx.sample(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": {"type": "text", "text": prompt},
+                    }
+                ]
+            )
+            return result.text
+        except Exception as error:
+            last_error = error
+
+            if not is_context_overflow_error(error):
+                raise
+
+            await ctx.warning(
+                f"Context overflow at compression level {level}; retrying."
+            )
+
+    fallback = compact_article_context(base_context, max_retries)
+    return (
+        f"{fallback.title}\n\n"
+        f"Summary could not be generated with full context. "
+        f"Compact source excerpt:\n\n{fallback.content}"
+    )
+```
+
+在 `add_content_cluster()` 中可以这样替换原来的 `ctx.sample(...)`：
+
+```python
+from context_overflow_manager import (
+    ArticleContext,
+    safe_sample_with_context_retry,
+    select_top_related_titles,
+)
+
+related = article_memory.search_articles(query=article["content"], limit=5)
+
+summary = await safe_sample_with_context_retry(
+    ctx,
+    ArticleContext(
+        title=article["title"],
+        content=article["content"],
+        interests=interests.get("topics", []),
+        related_titles=select_top_related_titles(related, limit=3),
+        treatment=treatment,
+    ),
+)
+```
+
+这样项目就不只是“预防上下文溢出”，而是有了明确的“检测到溢出后压缩并重试”的恢复机制。

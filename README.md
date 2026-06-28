@@ -10,6 +10,7 @@ This project is a notebook-based prototype for a personalized AI newspaper agent
 - `0201_advanced_mcp_crud_tools.ipynb`: earlier CRUD-oriented newspaper tools.
 - `01_basic_tools.ipynb`: basic tool-calling and MCP progression.
 - `AGENT_PROJECT_COMBINED.md`: consolidated Chinese explanation with the core code path in one file.
+- `context_overflow_manager.py`: reusable context compression and retry helpers for safer LLM calls.
 
 ## Agent Roles
 
