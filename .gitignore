@@ -1,0 +1,16 @@
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# Local workshop/editor files
+.idea/
+*.ipynb.bak
+
+# Generated local data
+data/
+chroma/
+chromadb/
+newspapers/
