@@ -9,6 +9,7 @@ This project is a notebook-based prototype for a personalized AI newspaper agent
 - `0401_news_agent_client.ipynb`: user-facing News Agent client that connects the newspaper tools and Preference Agent.
 - `0201_advanced_mcp_crud_tools.ipynb`: earlier CRUD-oriented newspaper tools.
 - `01_basic_tools.ipynb`: basic tool-calling and MCP progression.
+- `AGENT_PROJECT_COMBINED.md`: consolidated Chinese explanation with the core code path in one file.
 
 ## Agent Roles
 
